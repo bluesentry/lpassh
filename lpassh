@@ -12,7 +12,7 @@ function clean_up {
 
 function show_help {
     progname=`basename $0`
-    echo "Usage: ${progname} <SecureNoteName>"
+    echo "Usage: ${progname} <SecureNoteName> [<User@Host>] [<Port>]"
 }
 
 function lastpass_login {
@@ -54,10 +54,27 @@ Please make sure secret is stored as a Secure Note of type SSH Key inside of Las
     exit 1
 fi
 
-everything=`lpass show ${lpassitem}`
-host=`echo "${everything}" | awk -F': ' '$1=="Host" {print $2}'`
-username=`echo "${everything}" | awk -F': ' '$1=="User" {print $2}'`
-port=`echo "${everything}" | awk -F': ' '$1=="Port" {print $2}'`
+if [ "$#" -eq 1 ]; then
+    everything=`lpass show ${lpassitem}`
+    host=`echo "${everything}" | awk -F': ' '$1=="Host" {print $2}'`
+    username=`echo "${everything}" | awk -F': ' '$1=="User" {print $2}'`
+    port=`echo "${everything}" | awk -F': ' '$1=="Port" {print $2}'`
+    if [[ "${port}" == "" ]]; then
+        port = "22"
+    fi
+    sshargs="${username}@${host}"
+    portargs="-p ${port}"
+fi
+if [ "$#" -eq 2 ]; then
+    sshargs=$2
+    portargs="-p 22"
+fi
+if [ "$#" -eq 3 ]; then
+    sshargs=$2
+    port=${@:3}
+    portargs="-p ${port}"
+fi
+
 lpass show ${lpassitem} --notes > "${tempfile}"
 chmod 400 "${tempfile}"
-ssh -i "${tempfile}" "${username}"@"${host}" -p ${port}
+ssh -i "${tempfile}" "${sshargs}" "${portargs}"
