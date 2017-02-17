@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+
+set -e
+
+tempfile=$(mktemp -u)
+trap clean_up EXIT
+
+function clean_up {
+    chmod 600 "${tempfile}" > /dev/null 2>&1
+    rm -f $tempfile
+}
+
+function show_help {
+    progname=`basename $0`
+    echo "Usage: ${progname} <SecureNoteName>"
+}
+
+function lastpass_login {
+    if ! lpass status -q > /dev/null; then
+        read -p "LastPass Username> " lpuser
+
+        if ! lpass login ${lpuser}; then
+            echo "Unable to authenticate to LastPass!"
+            exit 1
+        fi
+    fi
+}
+
+function lastpass_sync {
+    echo "Starting LastPass sync..."
+
+    if ! lpass sync; then
+        echo "Error syncing LastPass!"
+        exit 1
+    fi
+
+    echo "Sync complete."
+}
+
+if [ "$#" -lt 1 ]; then
+    show_help
+    exit 1
+fi
+
+lastpass_login
+lastpass_sync
+
+lpassitem=$1
+
+if ! lpass show ${lpassitem} > /dev/null; then
+    echo 'Error retrieving values from LastPass.
+
+Please make sure secret is stored as a Secure Note of type SSH Key inside of LastPass.'
+    exit 1
+fi
+
+everything=`lpass show ${lpassitem}`
+host=`echo "${everything}" | awk -F': ' '$1=="Host" {print $2}'`
+username=`echo "${everything}" | awk -F': ' '$1=="User" {print $2}'`
+port=`echo "${everything}" | awk -F': ' '$1=="Port" {print $2}'`
+lpass show ${lpassitem} --notes > "${tempfile}"
+chmod 400 "${tempfile}"
+ssh -i "${tempfile}" "${username}"@"${host}" -p ${port}
