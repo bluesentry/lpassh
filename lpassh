@@ -2,27 +2,109 @@
 
 set -e
 
-tempfile=$(mktemp -u)
-trap clean_up EXIT
+CONN_STR="ssh"
+TMPFILE=$(mktemp -d)
+# trap clean_up EXIT
 
 function clean_up {
-    chmod 600 "${tempfile}" > /dev/null 2>&1
-    rm -f $tempfile
+    chmod -R 600 "${TMPFILE}" > /dev/null 2>&1
+    rm -Rf "${TMPFILE}"
 }
 
 function show_help {
-    progname=`basename $0`
+    progname=$(basename "$0")
     echo "Usage: ${progname} <SecureNoteName> [<User@Host>] [<Port>]"
 }
 
 function lastpass_login {
     if ! lpass status -q > /dev/null; then
-        read -p "LastPass Username> " lpuser
+        read -r -p "LastPass Username> " lpuser
 
-        if ! lpass login ${lpuser}; then
+        if ! lpass login "${lpuser}"; then
             echo "Unable to authenticate to LastPass!"
             exit 1
         fi
+    fi
+}
+
+function build_host_conn_jump {
+    local iter
+    local len
+    local everything
+    local host
+    local username
+    local port
+    local tempfile
+    local sshconf
+    local sshargs
+    iter=$2
+    len=$3
+    everything=$(lpass show "$1")
+    host=$(echo "${everything}" | awk -F': ' '$1=="Host" {print $2}')
+    username=$(echo "${everything}" | awk -F': ' '$1=="User" {print $2}')
+    port=$(echo "${everything}" | awk -F': ' '$1=="Port" {print $2}')
+    if [[ "${port}" == "" ]]; then
+        port="22"
+    fi
+    tempfile="${TMPFILE}/$1"
+sshconf=$(cat <<-EOF
+\n
+Host ${1}
+    identityfile ${tempfile}
+    hostname ${host}
+    user ${username}
+    port ${port}
+EOF
+)
+    lpass show "$1" --notes > "${tempfile}"
+    chmod 400 "${tempfile}"
+    echo -e "${sshconf}" >> ~/.ssh/config
+    if [[ $iter == "$len" ]]; then
+        sshargs="${1}"
+    else
+        sshargs="${1},"
+    fi
+    if [[ $iter == "1" ]]; then
+        sshargs=" -J ${sshargs}"
+    fi
+    CONN_STR="${CONN_STR}${sshargs}"
+}
+
+function build_host_conn_dest {
+    local everything
+    local host
+    local username
+    local port
+    local portargs
+    local sshargs
+    local tempfile
+    everything=$(lpass show "$1")
+    host=$(echo "${everything}" | awk -F': ' '$1=="Host" {print $2}')
+    username=$(echo "${everything}" | awk -F': ' '$1=="User" {print $2}')
+    port=$(echo "${everything}" | awk -F': ' '$1=="Port" {print $2}')
+    portargs=""
+    if [[ "${port}" == "" ]]; then
+        portargs=" "
+    elif [[ "${port}" == "22" ]]; then
+        portargs=" "
+    else
+        portargs=" -p ${port} "
+    fi
+    sshargs=" ${username}@${host}"
+    tempfile="${TMPFILE}/dest"
+    lpass show "$1" --notes > "${tempfile}"
+    chmod 400 "${tempfile}"
+    CONN_STR="${CONN_STR}${sshargs}${portargs}-i ${tempfile}"
+}
+
+function get_lpass_item {
+    local lpassitem=$1
+
+    if ! lpass show "${lpassitem}" > /dev/null; then
+        echo 'Error retrieving values from LastPass.
+
+Please make sure secret is stored as a Secure Note of type SSH Key inside of LastPass.'
+        exit 1
     fi
 }
 
@@ -45,36 +127,38 @@ fi
 lastpass_login
 lastpass_sync
 
-lpassitem=$1
-
-if ! lpass show ${lpassitem} > /dev/null; then
-    echo 'Error retrieving values from LastPass.
-
-Please make sure secret is stored as a Secure Note of type SSH Key inside of LastPass.'
-    exit 1
-fi
-
 if [ "$#" -eq 1 ]; then
-    everything=`lpass show ${lpassitem}`
-    host=`echo "${everything}" | awk -F': ' '$1=="Host" {print $2}'`
-    username=`echo "${everything}" | awk -F': ' '$1=="User" {print $2}'`
-    port=`echo "${everything}" | awk -F': ' '$1=="Port" {print $2}'`
-    if [[ "${port}" == "" ]]; then
-        port = "22"
+    if [[ "$1" =~ "+" ]]; then
+        OIFS=$IFS
+        IFS='+' read -r -a host_arr <<< "$1"
+        if [[ "${host_arr[0]}" =~ "," ]]; then
+            IFS=',' read -r -a jb_arr <<< "${host_arr}"
+        else
+            jb_arr=( ${host_arr[0]} )
+        fi
+        i=1
+        for jb in "${jb_arr[@]}"
+        do
+            build_host_conn_jump "$jb" $i ${#jb_arr[@]}
+            i=$((i+1))
+        done
+        IFS=$OIFS
+        build_host_conn_dest "${host_arr[1]}"
+    else
+        build_host_conn_dest "$1"
     fi
-    sshargs="${username}@${host}"
-    portargs="-p ${port}"
-fi
-if [ "$#" -eq 2 ]; then
-    sshargs=$2
-    portargs="-p 22"
-fi
-if [ "$#" -eq 3 ]; then
-    sshargs=$2
-    port=${@:3}
-    portargs="-p ${port}"
 fi
 
-lpass show ${lpassitem} --notes > "${tempfile}"
-chmod 400 "${tempfile}"
-ssh -i "${tempfile}" "${sshargs}" "${portargs}"
+# Still need to sort this out...
+# if [ "$#" -eq 2 ]; then
+#     sshargs=$2
+#     portargs="-p 22"
+# fi
+# if [ "$#" -eq 3 ]; then
+#     sshargs=$2
+#     port=${@:3}
+#     portargs="-p ${port}"
+# fi
+
+echo "${CONN_STR}"
+eval "${CONN_STR}"
